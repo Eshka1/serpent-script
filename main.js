@@ -5,7 +5,9 @@ const FONT = '15px "IBM Plex Mono", monospace'
 const LINE_HEIGHT = 24
 const PARAGRAPH_GAP = 24      // empty space between paragraphs
 const MAX_COLUMN_WIDTH = 680
-const TOP_MARGIN = 120
+const TOP_MARGIN = 300        // room for the big title above the text
+const TITLE = 'SERPENT'
+const TITLE_FONT_FAMILY = '"Playfair Display", serif'
 
 const PARAGRAPHS = [
     `Somewhere beneath this page a serpent is waking up. It does not read the words, it moves through them, and every line has to make room. Scroll down and it will travel with you. Move your mouse and it will follow you instead.`,
@@ -25,6 +27,7 @@ const scrollSpace = document.getElementById('scroll-space')
 
 // ---------- measure every paragraph once ----------
 await document.fonts.load(FONT)
+await document.fonts.load(`700 100px ${TITLE_FONT_FAMILY}`)
 const prepared = PARAGRAPHS.map((text) => prepareWithSegments(text, FONT))
 
 function columnBounds() {
@@ -46,6 +49,8 @@ function resize() {
     let height = TOP_MARGIN
     for (const p of prepared) height += layout(p, width, LINE_HEIGHT).height + PARAGRAPH_GAP
     scrollSpace.style.height = `${height + innerHeight * 0.5}px`
+
+    layoutTitle()
 }
 
 // ---------- the serpent (in page coordinates) ----------
@@ -61,8 +66,8 @@ const serpent = []
 for (let i = 0; i < SEGMENTS; i++) {
     const t = i / (SEGMENTS - 1)
     serpent.push({
-        x: innerWidth / 2 - i * SPACING,
-        y: TOP_MARGIN + 150,
+        x: innerWidth / 2,
+        y: innerHeight * 0.45 - i * SPACING,
         r: HEAD_RADIUS + (TAIL_RADIUS - HEAD_RADIUS) * t,
     })
 }
@@ -134,6 +139,124 @@ function freeGaps(left, right, rowTop, rowBottom) {
     return gaps
 }
 
+// ---------- big title: letters that get pushed and spring back ----------
+const titleLetters = []
+let titleFont = ''
+
+function layoutTitle() {
+    const { width } = columnBounds()
+    const size = Math.min(150, width / 4.2)
+    titleFont = `700 ${size}px ${TITLE_FONT_FAMILY}`
+    ctx.font = titleFont
+    const letterSpacing = size * 0.06
+    const widths = [...TITLE].map((ch) => ctx.measureText(ch).width)
+    const total = widths.reduce((a, b) => a + b, 0) + letterSpacing * (TITLE.length - 1)
+
+    let x = (innerWidth - total) / 2
+    const y = TOP_MARGIN - 70                     // baseline of the title
+        ;[...TITLE].forEach((ch, i) => {
+            const homeX = x + widths[i] / 2             // centre of the letter
+            const old = titleLetters[i]
+            titleLetters[i] = {
+                ch, homeX, homeY: y,
+                x: old ? old.x : homeX, y: old ? old.y : y,
+                vx: old ? old.vx : 0, vy: old ? old.vy : 0,
+                radius: size * 0.35,                      // how close the serpent must get
+            }
+            x += widths[i] + letterSpacing
+        })
+}
+
+function updateTitle() {
+    for (const L of titleLetters) {
+        // spring pulls the letter back home
+        let ax = (L.homeX - L.x) * 0.03
+        let ay = (L.homeY - L.y) * 0.03
+        // every segment close enough pushes the letter away
+        for (const seg of serpent) {
+            const dx = L.x - seg.x
+            const dy = (L.y - L.radius) - seg.y        // compare with the letter's middle, not its baseline
+            const dist = Math.hypot(dx, dy) || 1
+            const reach = seg.r + L.radius
+            if (dist < reach) {
+                const push = ((reach - dist) / reach) * 2.2
+                ax += (dx / dist) * push
+                ay += (dy / dist) * push
+            }
+        }
+        L.vx = (L.vx + ax) * 0.88                   // 0.88 = friction, so it settles
+        L.vy = (L.vy + ay) * 0.88
+        L.x += L.vx
+        L.y += L.vy
+    }
+}
+
+function drawTitle() {
+    ctx.font = titleFont
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.lineWidth = 1.5
+    for (const L of titleLetters) {
+        const offset = Math.hypot(L.x - L.homeX, L.y - L.homeY)
+        const glow = Math.min(1, offset / 40)       // 0 at home, 1 when knocked away
+        ctx.save()
+        ctx.translate(L.x, L.y)
+        ctx.rotate((L.x - L.homeX) * 0.004)         // tilt a little while displaced
+        ctx.strokeStyle = `rgba(255, ${Math.round(255 - 115 * glow)}, ${Math.round(255 - 195 * glow)}, ${0.16 + 0.6 * glow})`
+        ctx.strokeText(L.ch, 0, 0)
+        ctx.restore()
+    }
+    ctx.textAlign = 'left'
+}
+
+// ---------- glyph particles that break off the head ----------
+const GLYPHS = PARAGRAPHS.join('').replace(/\s/g, '')
+const particles = []
+let spawnBudget = 0
+let lastHead = { x: head.x, y: head.y }
+
+function updateParticles() {
+    const speed = Math.hypot(head.x - lastHead.x, head.y - lastHead.y)
+    lastHead = { x: head.x, y: head.y }
+
+    spawnBudget += speed * 0.12                   // faster serpent = more letters
+    while (spawnBudget >= 1 && particles.length < 250) {
+        spawnBudget -= 1
+        const a = Math.random() * Math.PI * 2
+        particles.push({
+            ch: GLYPHS[Math.floor(Math.random() * GLYPHS.length)],
+            x: head.x + Math.cos(a) * HEAD_RADIUS,
+            y: head.y + Math.sin(a) * HEAD_RADIUS,
+            vx: Math.cos(a) * (0.4 + Math.random()),
+            vy: Math.sin(a) * (0.4 + Math.random()),
+            life: 1,
+            size: 10 + Math.random() * 8,
+        })
+    }
+    spawnBudget = Math.min(spawnBudget, 1)
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i]
+        p.x += p.vx
+        p.y += p.vy
+        p.vx *= 0.97
+        p.vy = p.vy * 0.97 - 0.01                   // drift slowly upwards
+        p.life -= 0.012
+        if (p.life <= 0) particles.splice(i, 1)
+    }
+}
+
+function drawParticles() {
+    ctx.textBaseline = 'middle'
+    for (const p of particles) {
+        ctx.globalAlpha = p.life
+        ctx.font = `${p.size.toFixed(0)}px "IBM Plex Mono", monospace`
+        ctx.fillStyle = '#ffb36b'
+        ctx.fillText(p.ch, p.x, p.y)
+    }
+    ctx.globalAlpha = 1
+}
+
 // ---------- drawing (everything in page coordinates) ----------
 function drawText() {
     ctx.font = FONT
@@ -169,6 +292,17 @@ function drawText() {
 }
 
 function drawSerpent() {
+    // soft glow behind the head ('lighter' adds light instead of covering)
+    ctx.globalCompositeOperation = 'lighter'
+    const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, HEAD_RADIUS * 5)
+    glow.addColorStop(0, 'rgba(255, 140, 60, 0.35)')
+    glow.addColorStop(1, 'rgba(255, 140, 60, 0)')
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(head.x, head.y, HEAD_RADIUS * 5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.globalCompositeOperation = 'source-over'
+
     for (let i = serpent.length - 1; i >= 0; i--) {
         const seg = serpent[i]
         const t = i / (serpent.length - 1)
@@ -192,14 +326,30 @@ function drawSerpent() {
     }
 }
 
+function drawScrollHint() {
+    const alpha = Math.max(0, 1 - scrollY / 200) * 0.45   // fades out as you scroll
+    if (alpha <= 0) return
+    ctx.font = FONT
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillStyle = `rgba(201, 201, 209, ${alpha})`
+    ctx.fillText('scroll ↓  or move your mouse', innerWidth / 2, TOP_MARGIN - 40)
+    ctx.textAlign = 'left'
+}
+
 // ---------- animation loop ----------
 function loop(time) {
     updateSerpent(time)
+    updateTitle()
+    updateParticles()
 
     ctx.clearRect(0, 0, innerWidth, innerHeight)
     ctx.save()
     ctx.translate(0, -scrollY)       // shift the whole page up by how far we've scrolled
+    drawTitle()
+    drawScrollHint()
     drawText()
+    drawParticles()
     drawSerpent()
     ctx.restore()
 
