@@ -17,3 +17,8 @@ body {
     height: 100vh;
     display: block;
 }
+
+#scroll-space {
+    width: 1px;
+    /* invisible: it only makes the page tall enough to scroll */
+}
