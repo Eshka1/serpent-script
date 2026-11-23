@@ -6,10 +6,11 @@ const LINE_HEIGHT = 24
 const PARAGRAPH_GAP = 24      // empty space between paragraphs
 const MAX_COLUMN_WIDTH = 680
 const TOP_MARGIN = 300        // room for the big title above the text
-const TITLE = 'SERPENT'
+const DEFAULT_TITLE = 'SERPENT'
+const MAX_CHARS = 4000       // limit for visitors' own text
 const TITLE_FONT_FAMILY = '"Playfair Display", serif'
 
-const PARAGRAPHS = [
+const DEFAULT_PARAGRAPHS = [
     `Somewhere beneath this page a serpent is waking up. It does not read the words, it moves through them, and every line has to make room. Scroll down and it will travel with you. Move your mouse and it will follow you instead.`,
     `Normally a browser would measure the whole page again every time something moves. That measuring step is called reflow, and it is one of the slowest things a web page can do. Doing it sixty times a second while a creature slides through a paragraph would make the page stutter.`,
     `This page takes a different route. Before anything moves, every word is measured exactly once with the browser's own font engine, and the widths are kept in memory. From then on, placing a line of text is just arithmetic: how much space is free in this row, and how many of those known widths fit into it.`,
@@ -28,7 +29,11 @@ const scrollSpace = document.getElementById('scroll-space')
 // ---------- measure every paragraph once ----------
 await document.fonts.load(FONT)
 await document.fonts.load(`700 100px ${TITLE_FONT_FAMILY}`)
-const prepared = PARAGRAPHS.map((text) => prepareWithSegments(text, FONT))
+
+// These change when a visitor applies their own text
+let title = DEFAULT_TITLE
+let paragraphs = DEFAULT_PARAGRAPHS
+let prepared = paragraphs.map((text) => prepareWithSegments(text, FONT))
 
 function columnBounds() {
     const width = Math.min(MAX_COLUMN_WIDTH, innerWidth - 48)
@@ -144,27 +149,32 @@ const titleLetters = []
 let titleFont = ''
 
 function layoutTitle() {
-    const { width } = columnBounds()
-    const size = Math.min(150, width / 4.2)
+    const letters = [...title]
+
+    // measure at 100px, then scale so the title fits 90% of the screen (max 150px)
+    ctx.font = `700 100px ${TITLE_FONT_FAMILY}`
+    const at100 = letters.reduce((sum, ch) => sum + ctx.measureText(ch).width + 6, 0)
+    const size = Math.min(150, (100 * innerWidth * 0.9) / at100)
+
     titleFont = `700 ${size}px ${TITLE_FONT_FAMILY}`
     ctx.font = titleFont
     const letterSpacing = size * 0.06
-    const widths = [...TITLE].map((ch) => ctx.measureText(ch).width)
-    const total = widths.reduce((a, b) => a + b, 0) + letterSpacing * (TITLE.length - 1)
+    const widths = letters.map((ch) => ctx.measureText(ch).width)
+    const total = widths.reduce((a, b) => a + b, 0) + letterSpacing * (letters.length - 1)
 
     let x = (innerWidth - total) / 2
     const y = TOP_MARGIN - 70                     // baseline of the title
-        ;[...TITLE].forEach((ch, i) => {
-            const homeX = x + widths[i] / 2             // centre of the letter
-            const old = titleLetters[i]
-            titleLetters[i] = {
-                ch, homeX, homeY: y,
-                x: old ? old.x : homeX, y: old ? old.y : y,
-                vx: old ? old.vx : 0, vy: old ? old.vy : 0,
-                radius: size * 0.35,                      // how close the serpent must get
-            }
-            x += widths[i] + letterSpacing
-        })
+    letters.forEach((ch, i) => {
+        const homeX = x + widths[i] / 2             // centre of the letter
+        const old = titleLetters[i]
+        titleLetters[i] = {
+            ch, homeX, homeY: y,
+            x: old ? old.x : homeX, y: old ? old.y : y,
+            vx: old ? old.vx : 0, vy: old ? old.vy : 0,
+            radius: size * 0.35,                      // how close the serpent must get
+        }
+        x += widths[i] + letterSpacing
+    })
 }
 
 function updateTitle() {
@@ -210,7 +220,8 @@ function drawTitle() {
 }
 
 // ---------- glyph particles that break off the head ----------
-const GLYPHS = PARAGRAPHS.join('').replace(/\s/g, '')
+// Array.from splits by character, so Bangla and emoji don't get cut in half
+let glyphs = Array.from(paragraphs.join('').replace(/\s/g, ''))
 const particles = []
 let spawnBudget = 0
 let lastHead = { x: head.x, y: head.y }
@@ -224,7 +235,7 @@ function updateParticles() {
         spawnBudget -= 1
         const a = Math.random() * Math.PI * 2
         particles.push({
-            ch: GLYPHS[Math.floor(Math.random() * GLYPHS.length)],
+            ch: glyphs[Math.floor(Math.random() * glyphs.length)],
             x: head.x + Math.cos(a) * HEAD_RADIUS,
             y: head.y + Math.sin(a) * HEAD_RADIUS,
             vx: Math.cos(a) * (0.4 + Math.random()),
@@ -337,6 +348,170 @@ function drawScrollHint() {
     ctx.textAlign = 'left'
 }
 
+// ---------- visitors' own text ----------
+const editToggle = document.getElementById('edit-toggle')
+const editor = document.getElementById('editor')
+const titleInput = document.getElementById('title-input')
+const textInput = document.getElementById('text-input')
+const charCount = document.getElementById('char-count')
+const resetButton = document.getElementById('reset-button')
+
+// Blank lines start a new paragraph; single line breaks just become spaces
+function toParagraphs(text) {
+    return text
+        .split(/\n\s*\n/)
+        .map((p) => p.replace(/\s+/g, ' ').trim())
+        .filter((p) => p.length > 0)
+}
+
+function setContent(newTitle, newParagraphs) {
+    title = newTitle
+    paragraphs = newParagraphs
+    prepared = paragraphs.map((text) => prepareWithSegments(text, FONT))   // measure the new text once
+    glyphs = Array.from(paragraphs.join('').replace(/\s/g, ''))
+    titleLetters.length = 0          // forget the old title's letters
+    resize()                         // new page height + new title layout
+    scrollTo(0, 0)
+}
+
+function updateCount() {
+    charCount.textContent = `${textInput.value.length} / ${MAX_CHARS}`
+}
+
+function openEditor() {
+    titleInput.value = title === DEFAULT_TITLE ? '' : title
+    textInput.value = paragraphs === DEFAULT_PARAGRAPHS ? '' : paragraphs.join('\n\n')
+    updateCount()
+    editor.hidden = false
+    textInput.focus()
+}
+
+editToggle.addEventListener('click', () => {
+    if (editor.hidden) openEditor()
+    else editor.hidden = true
+})
+
+textInput.addEventListener('input', updateCount)
+
+editor.addEventListener('submit', (e) => {
+    e.preventDefault()               // stop the form from reloading the page
+    const newParagraphs = toParagraphs(textInput.value.slice(0, MAX_CHARS))
+    const newTitle = titleInput.value.trim().toUpperCase() || DEFAULT_TITLE
+    setContent(newTitle, newParagraphs.length > 0 ? newParagraphs : DEFAULT_PARAGRAPHS)
+    editor.hidden = true
+})
+
+resetButton.addEventListener('click', () => {
+    setContent(DEFAULT_TITLE, DEFAULT_PARAGRAPHS)
+    editor.hidden = true
+})
+
+addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') editor.hidden = true
+})
+// ---------- funky background (drawn in screen coordinates) ----------
+const GRID = 34                 // distance between dots
+const GLOW_RADIUS = 220         // how far around the head the dots light up
+const GHOST_CHARS = '{}[]<>/=+*#&%@~01ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+const TICKER = 'SERPENT-SCRIPT  ·  BUILT WITH PRETEXT  ·  CANVAS  ·  NO DOM REFLOW  ·  '
+
+// big faint characters floating at different depths
+const ghosts = []
+for (let i = 0; i < 36; i++) {
+    const depth = Math.random()                   // 0 = far away, 1 = close
+    ghosts.push({
+        ch: GHOST_CHARS[Math.floor(Math.random() * GHOST_CHARS.length)],
+        x: Math.random() * innerWidth,
+        y: Math.random() * innerHeight,
+        size: 30 + depth * 90,                      // closer = bigger
+        depth,
+        rot: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 0.004,
+    })
+}
+
+// wrap a value into 0..size (like the screen wrapping around in old games)
+function wrap(value, size) {
+    return ((value % size) + size) % size
+}
+
+function drawDotGrid(time) {
+    const offsetY = -wrap(scrollY * 0.4, GRID)    // parallax: dots move slower than the text
+    const startX = (innerWidth % GRID) / 2
+
+    // pass 1: every dot, dim
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.07)'
+    for (let y = offsetY; y < innerHeight + GRID; y += GRID) {
+        for (let x = startX; x < innerWidth; x += GRID) ctx.fillRect(x - 1, y - 1, 2, 2)
+    }
+
+    // pass 2: only the dots near the head, glowing in rippling rings
+    const hx = head.x
+    const hy = head.y - scrollY                   // page -> screen coordinates
+    for (let y = offsetY; y < innerHeight + GRID; y += GRID) {
+        if (Math.abs(y - hy) > GLOW_RADIUS) continue
+        for (let x = startX; x < innerWidth; x += GRID) {
+            const d = Math.hypot(x - hx, y - hy)
+            if (d > GLOW_RADIUS) continue
+            const near = 1 - d / GLOW_RADIUS                           // 1 at the head, 0 at the edge
+            const ripple = Math.sin(d * 0.05 - time * 0.005) * 0.5 + 0.5
+            const size = 2 + near * 5 * ripple
+            ctx.fillStyle = `rgba(255, ${Math.round(120 + 80 * ripple)}, 70, ${near * (0.3 + 0.6 * ripple)})`
+            ctx.fillRect(x - size / 2, y - size / 2, size, size)
+        }
+    }
+}
+
+function drawGhosts() {
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.lineWidth = 1
+    for (const g of ghosts) {
+        g.y -= 0.1 + g.depth * 0.3                  // drift upwards, close ones faster
+        g.rot += g.spin
+        const y = wrap(g.y - scrollY * g.depth * 0.6, innerHeight + 200) - 100   // parallax + wrap
+        ctx.save()
+        ctx.translate(g.x, y)
+        ctx.rotate(g.rot)
+        ctx.font = `${g.size}px ${TITLE_FONT_FAMILY}`
+        ctx.strokeStyle = `rgba(180, 160, 255, ${0.04 + g.depth * 0.06})`
+        ctx.strokeText(g.ch, 0, 0)
+        ctx.restore()
+    }
+    ctx.textAlign = 'left'
+}
+
+function drawTickers(time) {
+    const { left, right } = columnBounds()
+    if (left < 70) return                         // no room on small screens
+
+    ctx.font = '12px "IBM Plex Mono", monospace'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+    const unit = ctx.measureText(TICKER).width
+    const text = TICKER.repeat(Math.ceil((innerHeight * 2) / unit) + 2)
+    const shift = wrap(scrollY * 0.6 + time * 0.02, unit)
+
+    // left margin: reads bottom-to-top, moves up as you scroll
+    ctx.save()
+    ctx.translate(left / 2, innerHeight)
+    ctx.rotate(-Math.PI / 2)
+    ctx.fillText(text, -shift, 0)
+    ctx.restore()
+
+    // right margin: reads top-to-bottom, moves the other way
+    ctx.save()
+    ctx.translate(right + (innerWidth - right) / 2, 0)
+    ctx.rotate(Math.PI / 2)
+    ctx.fillText(text, shift - unit, 0)
+    ctx.restore()
+}
+
+function drawBackground(time) {
+    drawGhosts()
+    drawDotGrid(time)
+    drawTickers(time)
+}
 // ---------- animation loop ----------
 function loop(time) {
     updateSerpent(time)
@@ -344,6 +519,7 @@ function loop(time) {
     updateParticles()
 
     ctx.clearRect(0, 0, innerWidth, innerHeight)
+    drawBackground(time)             // behind everything, fixed to the screen
     ctx.save()
     ctx.translate(0, -scrollY)       // shift the whole page up by how far we've scrolled
     drawTitle()

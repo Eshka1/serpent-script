@@ -15,6 +15,26 @@
 <body>
     <canvas id="stage"></canvas>
     <div id="scroll-space"></div>
+
+    <button id="edit-toggle" type="button">✎ Use your own text</button>
+
+    <form id="editor" hidden>
+        <h2>Your own text</h2>
+        <label>
+            Title
+            <input id="title-input" type="text" maxlength="12" placeholder="SERPENT">
+        </label>
+        <label>
+            Text
+            <textarea id="text-input" rows="10" maxlength="4000"
+                placeholder="Paste or type anything. Leave an empty line between paragraphs."></textarea>
+        </label>
+        <div class="editor-footer">
+            <span id="char-count">0 / 4000</span>
+            <button type="button" id="reset-button">Reset</button>
+            <button type="submit">Apply</button>
+        </div>
+    </form>
     <script type="module" src="main.js"></script>
 </body>
 
