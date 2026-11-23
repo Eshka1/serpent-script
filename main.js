@@ -23,50 +23,110 @@ function resize() {
 await document.fonts.load(FONT)              // wait for the web font first
 const prepared = prepareWithSegments(TEXT, FONT)
 
-// ---------- the obstacle (a circle for now) ----------
-const PADDING = 12   // empty space kept around the circle
-const MIN_GAP = 60   // gaps narrower than this are skipped
+// ---------- the serpent ----------
+const PADDING = 10       // empty space kept around the body
+const MIN_GAP = 60       // gaps narrower than this are skipped
+const SEGMENTS = 24      // how many circles make up the body
+const HEAD_RADIUS = 30
+const TAIL_RADIUS = 6
+const SPACING = 14       // distance between neighbouring circles
 
-const circle = { x: innerWidth / 2, y: 240, r: 70 }   // where it is drawn
-const target = { x: circle.x, y: circle.y }           // where it wants to go
+// Build the body: a row of circles that get smaller towards the tail
+const serpent = []
+for (let i = 0; i < SEGMENTS; i++) {
+    const t = i / (SEGMENTS - 1)                 // 0 at the head, 1 at the tail
+    serpent.push({
+        x: innerWidth / 2 - i * SPACING,
+        y: 240,
+        r: HEAD_RADIUS + (TAIL_RADIUS - HEAD_RADIUS) * t,
+    })
+}
+
+const head = serpent[0]
+const target = { x: head.x, y: head.y }
 
 addEventListener('pointermove', (e) => {
     target.x = e.clientX
     target.y = e.clientY
 })
 
-// Which part of this row does the circle cover? (null = none)
+// Move the head towards the mouse, then let every segment follow the one in front
+function updateSerpent() {
+    head.x += (target.x - head.x) * 0.12
+    head.y += (target.y - head.y) * 0.12
+
+    for (let i = 1; i < serpent.length; i++) {
+        const prev = serpent[i - 1]
+        const seg = serpent[i]
+        const dx = seg.x - prev.x
+        const dy = seg.y - prev.y
+        const dist = Math.hypot(dx, dy) || 1
+        // keep exactly SPACING pixels behind the previous segment
+        seg.x = prev.x + (dx / dist) * SPACING
+        seg.y = prev.y + (dy / dist) * SPACING
+    }
+}
+
+// Which part of this row does one circle cover? (null = none)
 function blockedRange(c, rowTop, rowBottom) {
-    const closestY = Math.max(rowTop, Math.min(c.y, rowBottom))  // nearest point of the row to the centre
+    const closestY = Math.max(rowTop, Math.min(c.y, rowBottom))
     const dy = Math.abs(c.y - closestY)
     const r = c.r + PADDING
-    if (dy >= r) return null                  // the row misses the circle
-    const half = Math.sqrt(r * r - dy * dy)   // Pythagoras: half-width of the circle at this height
+    if (dy >= r) return null
+    const half = Math.sqrt(r * r - dy * dy)
     return { left: c.x - half, right: c.x + half }
 }
 
-// Split the row into free gaps on the left and right of the circle
-function freeGaps(left, right, blocked) {
-    if (blocked === null) return [{ x: left, width: right - left }]
+// Collect the blocked pieces from every segment, merge overlaps, return the free gaps
+function freeGaps(left, right, rowTop, rowBottom) {
+    const blocked = []
+    for (const seg of serpent) {
+        const range = blockedRange(seg, rowTop, rowBottom)
+        if (range !== null) blocked.push(range)
+    }
+    blocked.sort((a, b) => a.left - b.left)
+
     const gaps = []
-    const leftEnd = Math.min(right, blocked.left)
-    const rightStart = Math.max(left, blocked.right)
-    if (leftEnd - left >= MIN_GAP) gaps.push({ x: left, width: leftEnd - left })
-    if (right - rightStart >= MIN_GAP) gaps.push({ x: rightStart, width: right - rightStart })
+    let x = left                                 // start of the current free space
+    for (const range of blocked) {
+        const end = Math.min(right, range.left)
+        if (end - x >= MIN_GAP) gaps.push({ x, width: end - x })
+        x = Math.max(x, range.right)               // jump past this blocked piece
+    }
+    if (right - x >= MIN_GAP) gaps.push({ x, width: right - x })
     return gaps
 }
 
-// ---------- lay out and draw ----------
-function draw() {
-    ctx.clearRect(0, 0, innerWidth, innerHeight)
+// ---------- drawing ----------
+function drawSerpent() {
+    // draw from tail to head so the head ends up on top
+    for (let i = serpent.length - 1; i >= 0; i--) {
+        const seg = serpent[i]
+        const t = i / (serpent.length - 1)
+        // colour fades from bright orange (head) to deep red (tail)
+        const red = 255
+        const green = Math.round(140 - 110 * t)
+        const blue = Math.round(60 - 40 * t)
+        ctx.beginPath()
+        ctx.arc(seg.x, seg.y, seg.r, 0, Math.PI * 2)
+        ctx.fillStyle = `rgb(${red}, ${green}, ${blue})`
+        ctx.fill()
+    }
 
-    // the circle
-    ctx.beginPath()
-    ctx.arc(circle.x, circle.y, circle.r, 0, Math.PI * 2)
-    ctx.fillStyle = '#ff8a3d'
-    ctx.fill()
+    // eyes, pointing the way the head is moving
+    const neck = serpent[1]
+    const angle = Math.atan2(head.y - neck.y, head.x - neck.x)
+    for (const side of [-1, 1]) {
+        const ex = head.x + Math.cos(angle) * 12 + Math.cos(angle + Math.PI / 2) * side * 11
+        const ey = head.y + Math.sin(angle) * 12 + Math.sin(angle + Math.PI / 2) * side * 11
+        ctx.beginPath()
+        ctx.arc(ex, ey, 4, 0, Math.PI * 2)
+        ctx.fillStyle = '#0b0b0f'
+        ctx.fill()
+    }
+}
 
-    // the text
+function drawText() {
     ctx.font = FONT
     ctx.fillStyle = '#c9c9d1'
     ctx.textBaseline = 'top'
@@ -79,25 +139,23 @@ function draw() {
     let finished = false
 
     while (!finished && y < innerHeight) {
-        const blocked = blockedRange(circle, y, y + LINE_HEIGHT)
-        const gaps = freeGaps(columnLeft, columnRight, blocked)
-
+        const gaps = freeGaps(columnLeft, columnRight, y, y + LINE_HEIGHT)
         for (const gap of gaps) {
             const line = layoutNextLine(prepared, gap.width, cursor)
             if (line === null) { finished = true; break }
             ctx.fillText(line.text, gap.x, y)
-            cursor = line.end      // the next gap continues from here
+            cursor = line.end
         }
-        y += LINE_HEIGHT         // next row (even if the circle filled this one)
+        y += LINE_HEIGHT
     }
 }
 
 // ---------- animation loop ----------
 function loop() {
-    // ease towards the mouse instead of jumping
-    circle.x += (target.x - circle.x) * 0.15
-    circle.y += (target.y - circle.y) * 0.15
-    draw()
+    updateSerpent()
+    ctx.clearRect(0, 0, innerWidth, innerHeight)
+    drawText()
+    drawSerpent()
     requestAnimationFrame(loop)
 }
 
